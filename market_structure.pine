@@ -1,0 +1,489 @@
+//@version=6
+indicator("Xentora Smart Money Indicator - Market Structure", overlay = true, max_labels_count = 500)
+
+//------------------------------------------------------------------------------
+// Module 1 Inputs
+//------------------------------------------------------------------------------
+groupModule = "Module 1 - Market Structure"
+
+enableModule = input.bool(true, "Enable Module 1", group = groupModule)
+showSwingLabels = input.bool(true, "Show Swing Labels", group = groupModule)
+showStructureLabels = input.bool(true, "Show Structure Labels", group = groupModule)
+swingLength = input.int(3, "Swing Length", minval = 1, group = groupModule, tooltip = "Confirmed pivot length. Larger values reduce noise but add more confirmation delay.")
+
+//------------------------------------------------------------------------------
+// Visual Settings
+//------------------------------------------------------------------------------
+colorSwingHigh = color.new(color.red, 0)
+colorSwingLow = color.new(color.lime, 0)
+colorHH = color.new(color.green, 0)
+colorHL = color.new(color.teal, 0)
+colorLH = color.new(color.orange, 0)
+colorLL = color.new(color.maroon, 0)
+colorEH = color.new(color.yellow, 0)
+colorEL = color.new(color.aqua, 0)
+
+//------------------------------------------------------------------------------
+// Engine Constants
+//------------------------------------------------------------------------------
+int SIDE_NONE = 0
+int SIDE_HIGH = 1
+int SIDE_LOW = -1
+
+int TREND_NEUTRAL = 0
+int TREND_BULLISH = 1
+int TREND_BEARISH = -1
+
+//------------------------------------------------------------------------------
+// Function: Return a confirmed swing high candidate.
+// A value is only emitted after the required bars on the right are closed,
+// which keeps the detection non-repainting.
+//------------------------------------------------------------------------------
+f_getConfirmedSwingHigh(int length) =>
+    float pivotPrice = ta.pivothigh(high, length, length)
+    int pivotIndex = not na(pivotPrice) ? bar_index[length] : na
+    [pivotPrice, pivotIndex]
+
+//------------------------------------------------------------------------------
+// Function: Return a confirmed swing low candidate.
+// A value is only emitted after the required bars on the right are closed,
+// which keeps the detection non-repainting.
+//------------------------------------------------------------------------------
+f_getConfirmedSwingLow(int length) =>
+    float pivotPrice = ta.pivotlow(low, length, length)
+    int pivotIndex = not na(pivotPrice) ? bar_index[length] : na
+    [pivotPrice, pivotIndex]
+
+//------------------------------------------------------------------------------
+// Function: Determine whether a same-side pivot is more extreme than the
+// current pending candidate. This lets the engine refine a leg without ever
+// committing consecutive highs or consecutive lows.
+//------------------------------------------------------------------------------
+f_isMoreExtremeCandidate(int side, float newPrice, float currentPrice) =>
+    bool isMoreExtreme = false
+    if side == SIDE_HIGH
+        isMoreExtreme := na(currentPrice) or newPrice >= currentPrice
+    else if side == SIDE_LOW
+        isMoreExtreme := na(currentPrice) or newPrice <= currentPrice
+    isMoreExtreme
+
+//------------------------------------------------------------------------------
+// Function: Classify a committed structural high relative to the previous
+// committed structural high. Equal highs are kept as a separate event.
+//------------------------------------------------------------------------------
+f_classifyHigh(float currentHigh, float previousHigh) =>
+    string structure = na
+    if not na(previousHigh)
+        structure := currentHigh > previousHigh ? "HH" : currentHigh < previousHigh ? "LH" : "EH"
+    structure
+
+//------------------------------------------------------------------------------
+// Function: Classify a committed structural low relative to the previous
+// committed structural low. Equal lows are kept as a separate event.
+//------------------------------------------------------------------------------
+f_classifyLow(float currentLow, float previousLow) =>
+    string structure = na
+    if not na(previousLow)
+        structure := currentLow > previousLow ? "HL" : currentLow < previousLow ? "LL" : "EL"
+    structure
+
+//------------------------------------------------------------------------------
+// Function: Update high-side sequence memory used later by BOS / CHoCH.
+//------------------------------------------------------------------------------
+f_updateHighState(float committedPrice, int committedIndex, string committedStructure, float lastHighPrice, int lastHighIndex, string lastHighStructure) =>
+    float nextHighPrice = committedPrice
+    int nextHighIndex = committedIndex
+    string nextHighStructure = committedStructure
+    [nextHighPrice, nextHighIndex, nextHighStructure]
+
+//------------------------------------------------------------------------------
+// Function: Update low-side sequence memory used later by BOS / CHoCH.
+//------------------------------------------------------------------------------
+f_updateLowState(float committedPrice, int committedIndex, string committedStructure, float lastLowPrice, int lastLowIndex, string lastLowStructure) =>
+    float nextLowPrice = committedPrice
+    int nextLowIndex = committedIndex
+    string nextLowStructure = committedStructure
+    [nextLowPrice, nextLowIndex, nextLowStructure]
+
+//------------------------------------------------------------------------------
+// Function: Derive market bias from committed structural sequence.
+// The trend only changes when committed swings support a directional sequence.
+// Equal highs/lows keep the current bias unchanged.
+//------------------------------------------------------------------------------
+f_updateTrendState(int currentTrend, string latestHighStructure, string latestLowStructure) =>
+    int nextTrend = currentTrend
+    if latestHighStructure == "HH" and latestLowStructure == "HL"
+        nextTrend := TREND_BULLISH
+    else if latestHighStructure == "LH" and latestLowStructure == "LL"
+        nextTrend := TREND_BEARISH
+    nextTrend
+
+//------------------------------------------------------------------------------
+// Function: Draw a generic label on the chart.
+//------------------------------------------------------------------------------
+f_drawLabel(bool isEnabled, int x, float y, string text, label.style styleValue, color bgColor, color textColor) =>
+    if isEnabled and not na(x) and not na(y) and str.length(str.tostring(text)) > 0
+        label.new(x = x, y = y, text = text, style = styleValue, color = bgColor, textcolor = textColor, size = size.tiny)
+
+//------------------------------------------------------------------------------
+// Function: Draw a committed swing label.
+//------------------------------------------------------------------------------
+f_drawCommittedSwing(bool isEnabled, int side, int pivotIndex, float pivotPrice) =>
+    string swingText = side == SIDE_HIGH ? "SH" : side == SIDE_LOW ? "SL" : na
+    label.style swingStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
+    color swingColor = side == SIDE_HIGH ? colorSwingHigh : colorSwingLow
+    color swingTextColor = side == SIDE_HIGH ? color.white : color.black
+    f_drawLabel(isEnabled, pivotIndex, pivotPrice, swingText, swingStyle, swingColor, swingTextColor)
+
+//------------------------------------------------------------------------------
+// Function: Draw a committed structure label.
+//------------------------------------------------------------------------------
+f_drawStructure(bool isEnabled, int side, int pivotIndex, float pivotPrice, string structureText) =>
+    if isEnabled and not na(structureText)
+        color structureColor = structureText == "HH" ? colorHH : structureText == "HL" ? colorHL : structureText == "LH" ? colorLH : structureText == "LL" ? colorLL : structureText == "EH" ? colorEH : colorEL
+        label.style structureStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
+        f_drawLabel(isEnabled, pivotIndex, pivotPrice, structureText, structureStyle, structureColor, color.black)
+
+//------------------------------------------------------------------------------
+// Function: Process one confirmed pivot candidate.
+// The engine keeps one pending candidate per active leg. A structural swing is
+// only committed when the opposite-side pivot confirms the leg turn.
+//------------------------------------------------------------------------------
+f_processPivotEvent(
+    int eventSide,
+    float eventPrice,
+    int eventIndex,
+    int pendingSide,
+    float pendingPrice,
+    int pendingIndex,
+    float lastHighPrice,
+    int lastHighIndex,
+    string lastHighStructure,
+    float lastLowPrice,
+    int lastLowIndex,
+    string lastLowStructure,
+    int currentTrend
+    ) =>
+
+    int nextPendingSide = pendingSide
+    float nextPendingPrice = pendingPrice
+    int nextPendingIndex = pendingIndex
+
+    float nextLastHighPrice = lastHighPrice
+    int nextLastHighIndex = lastHighIndex
+    string nextLastHighStructure = lastHighStructure
+
+    float nextLastLowPrice = lastLowPrice
+    int nextLastLowIndex = lastLowIndex
+    string nextLastLowStructure = lastLowStructure
+
+    int nextTrend = currentTrend
+
+    bool commitOccurred = false
+    int commitSide = SIDE_NONE
+    float commitPrice = na
+    int commitIndex = na
+    string commitStructure = na
+
+    if eventSide != SIDE_NONE and not na(eventPrice) and not na(eventIndex)
+        if pendingSide == SIDE_NONE
+            nextPendingSide := eventSide
+            nextPendingPrice := eventPrice
+            nextPendingIndex := eventIndex
+        else if eventSide == pendingSide
+            if f_isMoreExtremeCandidate(eventSide, eventPrice, pendingPrice)
+                nextPendingPrice := eventPrice
+                nextPendingIndex := eventIndex
+        else
+            commitOccurred := true
+            commitSide := pendingSide
+            commitPrice := pendingPrice
+            commitIndex := pendingIndex
+
+            if pendingSide == SIDE_HIGH
+                commitStructure := f_classifyHigh(pendingPrice, lastHighPrice)
+                [nextLastHighPrice, nextLastHighIndex, nextLastHighStructure] = f_updateHighState(pendingPrice, pendingIndex, commitStructure, lastHighPrice, lastHighIndex, lastHighStructure)
+            else
+                commitStructure := f_classifyLow(pendingPrice, lastLowPrice)
+                [nextLastLowPrice, nextLastLowIndex, nextLastLowStructure] = f_updateLowState(pendingPrice, pendingIndex, commitStructure, lastLowPrice, lastLowIndex, lastLowStructure)
+
+            nextTrend := f_updateTrendState(currentTrend, nextLastHighStructure, nextLastLowStructure)
+
+            nextPendingSide := eventSide
+            nextPendingPrice := eventPrice
+            nextPendingIndex := eventIndex
+
+    [
+        nextPendingSide,
+        nextPendingPrice,
+        nextPendingIndex,
+        nextLastHighPrice,
+        nextLastHighIndex,
+        nextLastHighStructure,
+        nextLastLowPrice,
+        nextLastLowIndex,
+        nextLastLowStructure,
+        nextTrend,
+        commitOccurred,
+        commitSide,
+        commitPrice,
+        commitIndex,
+        commitStructure
+    ]
+
+//------------------------------------------------------------------------------
+// Confirmed pivot candidates
+//------------------------------------------------------------------------------
+[confirmedHighPrice, confirmedHighIndex] = f_getConfirmedSwingHigh(swingLength)
+[confirmedLowPrice, confirmedLowIndex] = f_getConfirmedSwingLow(swingLength)
+
+//------------------------------------------------------------------------------
+// Persistent engine state
+// These series are intentionally global so later modules such as BOS and CHoCH
+// can consume the committed structure state without redesigning Module 1.
+//------------------------------------------------------------------------------
+var int msPendingSide = SIDE_NONE
+var float msPendingPrice = na
+var int msPendingIndex = na
+
+var float msLastCommittedHighPrice = na
+var int msLastCommittedHighIndex = na
+var string msLastCommittedHighStructure = na
+
+var float msLastCommittedLowPrice = na
+var int msLastCommittedLowIndex = na
+var string msLastCommittedLowStructure = na
+
+var int msTrendState = TREND_NEUTRAL
+
+//------------------------------------------------------------------------------
+// Process confirmed pivot candidates in chronological order.
+// When both a high and low are confirmed on the same bar, their pivot indices
+// decide the processing order. This preserves a deterministic state machine.
+//------------------------------------------------------------------------------
+if enableModule
+    bool hasHighEvent = not na(confirmedHighPrice)
+    bool hasLowEvent = not na(confirmedLowPrice)
+    bool commitOccurred = false
+    int commitSide = SIDE_NONE
+    float commitPrice = na
+    int commitIndex = na
+    string commitStructure = na
+
+    if hasHighEvent and hasLowEvent
+        if confirmedHighIndex <= confirmedLowIndex
+            [
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState,
+                commitOccurred,
+                commitSide,
+                commitPrice,
+                commitIndex,
+                commitStructure
+            ] = f_processPivotEvent(
+                SIDE_HIGH,
+                confirmedHighPrice,
+                confirmedHighIndex,
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState
+            )
+
+            if commitOccurred
+                f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+                f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)
+
+            [
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState,
+                commitOccurred,
+                commitSide,
+                commitPrice,
+                commitIndex,
+                commitStructure
+            ] = f_processPivotEvent(
+                SIDE_LOW,
+                confirmedLowPrice,
+                confirmedLowIndex,
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState
+            )
+
+            if commitOccurred
+                f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+                f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)
+        else
+            [
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState,
+                commitOccurred,
+                commitSide,
+                commitPrice,
+                commitIndex,
+                commitStructure
+            ] = f_processPivotEvent(
+                SIDE_LOW,
+                confirmedLowPrice,
+                confirmedLowIndex,
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState
+            )
+
+            if commitOccurred
+                f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+                f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)
+
+            [
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState,
+                commitOccurred,
+                commitSide,
+                commitPrice,
+                commitIndex,
+                commitStructure
+            ] = f_processPivotEvent(
+                SIDE_HIGH,
+                confirmedHighPrice,
+                confirmedHighIndex,
+                msPendingSide,
+                msPendingPrice,
+                msPendingIndex,
+                msLastCommittedHighPrice,
+                msLastCommittedHighIndex,
+                msLastCommittedHighStructure,
+                msLastCommittedLowPrice,
+                msLastCommittedLowIndex,
+                msLastCommittedLowStructure,
+                msTrendState
+            )
+
+            if commitOccurred
+                f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+                f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)
+    else if hasHighEvent
+        [
+            msPendingSide,
+            msPendingPrice,
+            msPendingIndex,
+            msLastCommittedHighPrice,
+            msLastCommittedHighIndex,
+            msLastCommittedHighStructure,
+            msLastCommittedLowPrice,
+            msLastCommittedLowIndex,
+            msLastCommittedLowStructure,
+            msTrendState,
+            commitOccurred,
+            commitSide,
+            commitPrice,
+            commitIndex,
+            commitStructure
+        ] = f_processPivotEvent(
+            SIDE_HIGH,
+            confirmedHighPrice,
+            confirmedHighIndex,
+            msPendingSide,
+            msPendingPrice,
+            msPendingIndex,
+            msLastCommittedHighPrice,
+            msLastCommittedHighIndex,
+            msLastCommittedHighStructure,
+            msLastCommittedLowPrice,
+            msLastCommittedLowIndex,
+            msLastCommittedLowStructure,
+            msTrendState
+        )
+
+        if commitOccurred
+            f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+            f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)
+    else if hasLowEvent
+        [
+            msPendingSide,
+            msPendingPrice,
+            msPendingIndex,
+            msLastCommittedHighPrice,
+            msLastCommittedHighIndex,
+            msLastCommittedHighStructure,
+            msLastCommittedLowPrice,
+            msLastCommittedLowIndex,
+            msLastCommittedLowStructure,
+            msTrendState,
+            commitOccurred,
+            commitSide,
+            commitPrice,
+            commitIndex,
+            commitStructure
+        ] = f_processPivotEvent(
+            SIDE_LOW,
+            confirmedLowPrice,
+            confirmedLowIndex,
+            msPendingSide,
+            msPendingPrice,
+            msPendingIndex,
+            msLastCommittedHighPrice,
+            msLastCommittedHighIndex,
+            msLastCommittedHighStructure,
+            msLastCommittedLowPrice,
+            msLastCommittedLowIndex,
+            msLastCommittedLowStructure,
+            msTrendState
+        )
+
+        if commitOccurred
+            f_drawCommittedSwing(showSwingLabels, commitSide, commitIndex, commitPrice)
+            f_drawStructure(showStructureLabels, commitSide, commitIndex, commitPrice, commitStructure)

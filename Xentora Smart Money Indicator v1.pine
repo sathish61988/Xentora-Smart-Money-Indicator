@@ -1,0 +1,94 @@
+//@version=6
+indicator("Xentora Smart Money Indicator", shorttitle = "Xentora SMC", overlay = true, max_labels_count = 500)
+
+//------------------------------------------------------------------------------
+// Inputs
+//------------------------------------------------------------------------------
+swingGroup = "Version 1 - Swings"
+showSwingHighs = input.bool(true, "Show Swing Highs", group = swingGroup)
+showSwingLows = input.bool(true, "Show Swing Lows", group = swingGroup)
+showStructureLabels = input.bool(true, "Show HH / HL / LH / LL", group = swingGroup)
+swingLength = input.int(3, "Swing Confirmation Length", minval = 1, group = swingGroup, tooltip = "Uses left/right pivot confirmation. Larger values produce stronger but later-confirmed swings.")
+
+//------------------------------------------------------------------------------
+// Styling
+//------------------------------------------------------------------------------
+highColor = color.new(color.red, 0)
+lowColor = color.new(color.lime, 0)
+hhColor = color.new(color.green, 0)
+hlColor = color.new(color.teal, 0)
+lhColor = color.new(color.orange, 0)
+llColor = color.new(color.maroon, 0)
+
+//------------------------------------------------------------------------------
+// Functions
+//------------------------------------------------------------------------------
+f_getSwingHigh(int length) =>
+    float pivotPrice = ta.pivothigh(high, length, length)
+    int pivotIndex = not na(pivotPrice) ? bar_index[length] : na
+    [pivotPrice, pivotIndex]
+
+f_getSwingLow(int length) =>
+    float pivotPrice = ta.pivotlow(low, length, length)
+    int pivotIndex = not na(pivotPrice) ? bar_index[length] : na
+    [pivotPrice, pivotIndex]
+
+f_classifyHigh(float currentHigh, float previousHigh) =>
+    string structure = na
+    if not na(currentHigh) and not na(previousHigh)
+        structure := currentHigh > previousHigh ? "HH" : currentHigh < previousHigh ? "LH" : "EH"
+    structure
+
+f_classifyLow(float currentLow, float previousLow) =>
+    string structure = na
+    if not na(currentLow) and not na(previousLow)
+        structure := currentLow > previousLow ? "HL" : currentLow < previousLow ? "LL" : "EL"
+    structure
+
+f_plotPriceLabel(bool isEnabled, int x, float y, string text, color bgColor, label.style styleType, color txtColor) =>
+    if isEnabled and not na(x) and not na(y)
+        label.new(x = x, y = y, text = text, style = styleType, color = bgColor, textcolor = txtColor, size = size.tiny)
+
+f_plotStructureLabel(bool isEnabled, string structure, int x, float y, bool isHigh) =>
+    if isEnabled and not na(structure) and structure != "EH" and structure != "EL" and not na(x) and not na(y)
+        color structureColor = structure == "HH" ? hhColor : structure == "HL" ? hlColor : structure == "LH" ? lhColor : llColor
+        label.style structureStyle = isHigh ? label.style_label_down : label.style_label_up
+        f_plotPriceLabel(true, x, y, structure, structureColor, structureStyle, color.white)
+
+//------------------------------------------------------------------------------
+// Confirmed swing detection
+//------------------------------------------------------------------------------
+[swingHighPrice, swingHighIndex] = f_getSwingHigh(swingLength)
+[swingLowPrice, swingLowIndex] = f_getSwingLow(swingLength)
+
+//------------------------------------------------------------------------------
+// Persistent state
+//------------------------------------------------------------------------------
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighIndex = na
+var int lastSwingLowIndex = na
+
+//------------------------------------------------------------------------------
+// Swing high processing
+//------------------------------------------------------------------------------
+if not na(swingHighPrice)
+    string highStructure = f_classifyHigh(swingHighPrice, lastSwingHigh)
+
+    f_plotPriceLabel(showSwingHighs, swingHighIndex, swingHighPrice, "SH", highColor, label.style_label_down, color.white)
+    f_plotStructureLabel(showStructureLabels, highStructure, swingHighIndex, swingHighPrice, true)
+
+    lastSwingHigh := swingHighPrice
+    lastSwingHighIndex := swingHighIndex
+
+//------------------------------------------------------------------------------
+// Swing low processing
+//------------------------------------------------------------------------------
+if not na(swingLowPrice)
+    string lowStructure = f_classifyLow(swingLowPrice, lastSwingLow)
+
+    f_plotPriceLabel(showSwingLows, swingLowIndex, swingLowPrice, "SL", lowColor, label.style_label_up, color.black)
+    f_plotStructureLabel(showStructureLabels, lowStructure, swingLowIndex, swingLowPrice, false)
+
+    lastSwingLow := swingLowPrice
+    lastSwingLowIndex := swingLowIndex
