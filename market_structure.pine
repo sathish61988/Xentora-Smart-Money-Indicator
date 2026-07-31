@@ -213,23 +213,7 @@ f_processPivotEvent(
             nextPendingPrice := eventPrice
             nextPendingIndex := eventIndex
 
-    [
-        nextPendingSide,
-        nextPendingPrice,
-        nextPendingIndex,
-        nextLastHighPrice,
-        nextLastHighIndex,
-        nextLastHighStructure,
-        nextLastLowPrice,
-        nextLastLowIndex,
-        nextLastLowStructure,
-        nextTrend,
-        commitOccurred,
-        commitSide,
-        commitPrice,
-        commitIndex,
-        commitStructure
-    ]
+    [nextPendingSide, nextPendingPrice, nextPendingIndex, nextLastHighPrice, nextLastHighIndex, nextLastHighStructure, nextLastLowPrice, nextLastLowIndex, nextLastLowStructure, nextTrend, commitOccurred, commitSide, commitPrice, commitIndex, commitStructure]
 
 //------------------------------------------------------------------------------
 // Confirmed pivot candidates
