@@ -121,7 +121,7 @@ f_updateTrendState(int currentTrend, string latestHighStructure, string latestLo
 //------------------------------------------------------------------------------
 // Function: Draw a generic label on the chart.
 //------------------------------------------------------------------------------
-f_drawLabel(bool isEnabled, int x, float y, string labelText, label.style styleValue, color bgColor, color textColor) =>
+f_drawLabel(bool isEnabled, int x, float y, string labelText, string styleValue, color bgColor, color textColor) =>
     if isEnabled and not na(x) and not na(y) and not na(labelText)
         label.new(x = x, y = y, text = labelText, style = styleValue, color = bgColor, textcolor = textColor, size = size.tiny)
 
