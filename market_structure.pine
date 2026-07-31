@@ -130,7 +130,7 @@ f_drawLabel(bool isEnabled, int x, float y, string labelText, string styleValue,
 //------------------------------------------------------------------------------
 f_drawCommittedSwing(bool isEnabled, int side, int pivotIndex, float pivotPrice) =>
     string swingText = side == SIDE_HIGH ? "SH" : side == SIDE_LOW ? "SL" : na
-    label.style swingStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
+    swingStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
     color swingColor = side == SIDE_HIGH ? colorSwingHigh : colorSwingLow
     color swingTextColor = side == SIDE_HIGH ? color.white : color.black
     f_drawLabel(isEnabled, pivotIndex, pivotPrice, swingText, swingStyle, swingColor, swingTextColor)
@@ -141,7 +141,7 @@ f_drawCommittedSwing(bool isEnabled, int side, int pivotIndex, float pivotPrice)
 f_drawStructure(bool isEnabled, int side, int pivotIndex, float pivotPrice, string structureText) =>
     if isEnabled and not na(structureText)
         color structureColor = structureText == "HH" ? colorHH : structureText == "HL" ? colorHL : structureText == "LH" ? colorLH : structureText == "LL" ? colorLL : structureText == "EH" ? colorEH : colorEL
-        label.style structureStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
+        structureStyle = side == SIDE_HIGH ? label.style_label_down : label.style_label_up
         f_drawLabel(isEnabled, pivotIndex, pivotPrice, structureText, structureStyle, structureColor, color.black)
 
 //------------------------------------------------------------------------------
